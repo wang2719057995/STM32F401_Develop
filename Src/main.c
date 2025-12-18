@@ -95,11 +95,7 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-	uint16_t ValueBuff1[FilterNum];
-	uint16_t ValueBuff2[FilterNum];
-	uint16_t ValueBuff3[FilterNum];
-	uint16_t ValueBuff4[FilterNum];
-	uint16_t ValueBuff5[FilterNum];
+	uint16_t ValueBuff[ADC_CHANNELS][FilterNum];
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -129,14 +125,14 @@ int main(void)
   MX_TIM11_Init();
   /* USER CODE BEGIN 2 */
 	
-	//HAL_ADCEx_Calibration_Start(&hadc1,ADC_SINGLE_ENDED);//ADCУ׼����
+	//HAL_ADCEx_Calibration_Start(&hadc1,ADC_SINGLE_ENDED);//ADCУ׼����
 	HAL_TIM_Base_Start(&htim3);
 	HAL_ADC_Start_DMA(&hadc1, (uint32_t *)ADCValue, ADC_CHANNELS);
 	
-	//LED����
+	//LED����
 	HAL_TIM_Base_Start_IT(&htim10);
 	
-	//OLEDˢ�¿���
+	//OLEDˢ�¿���
 	HAL_TIM_Base_Start_IT(&htim11);
 	
 	OLED_Init();
@@ -148,37 +144,34 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-		if(ADCNum<FilterNum && ADCConvertDone == 1)
-		{
-			ValueBuff1[ADCNum] = ADCValue[0];
-			ValueBuff2[ADCNum] = ADCValue[1];
-			ValueBuff3[ADCNum] = ADCValue[2];
-			ValueBuff4[ADCNum] = ADCValue[3];
-			ValueBuff5[ADCNum] = ADCValue[4];
-			ADCNum++;
-			ADCConvertDone = 0;
-			if(ADCNum >= FilterNum)
-			{
-				ADCNum = 0;
-				//��ֵ�˲�
-				//ADCFilterResult[0] = BubblingSort(ValueBuff1, FilterNum);
-				//ADCFilterResult[1] = BubblingSort(ValueBuff2, FilterNum);
-				//ADCFilterResult[2] = BubblingSort(ValueBuff3, FilterNum);
-				//ADCFilterResult[3] = BubblingSort(ValueBuff4, FilterNum);
-				//��ֵ�˲�
-				ADCFilterResult[0] = AverageFilter(ValueBuff1, FilterNum);
-				ADCFilterResult[1] = AverageFilter(ValueBuff2, FilterNum);
-				ADCFilterResult[2] = AverageFilter(ValueBuff3, FilterNum);
-				ADCFilterResult[3] = AverageFilter(ValueBuff4, FilterNum);
-				ADCFilterResult[4] = AverageFilter(ValueBuff5, FilterNum);
-			}
-		}
-		if(OLEDUpdateFlag == 1)
-		{
-			OLEDDisplay();
-			OLEDUpdateFlag = 0;
-			//HAL_Delay(100);
-		}
+        // 改进：使用一阶滞后滤波替代均值滤波
+        // 优点：无需等待采集满N个点，每次DMA完成即可更新结果，实时性更强，且无需大数组节省RAM
+        if(ADCConvertDone == 1)
+        {
+            ADCConvertDone = 0;
+            for(uint8_t i = 0; i < ADC_CHANNELS; i++)
+            {
+                // 简单的初始化判断，防止上电时从0缓慢爬升
+                if(ADCFilterResult[i] == 0)
+                {
+                    ADCFilterResult[i] = ADCValue[i];
+                }
+                else
+                {
+                    // 一阶滤波公式: Y(n) = (X(n) + (K-1)*Y(n-1)) / K
+                    // FilterNum 在此处作为滤波系数 K 使用
+                    // 系数越大，滤波效果越强（越平滑），但对变化的响应越慢
+                    ADCFilterResult[i] = (ADCValue[i] + (FilterNum - 1) * ADCFilterResult[i]) / FilterNum;
+                }
+            }
+        }
+
+        if(OLEDUpdateFlag == 1)
+        {
+            OLEDDisplay();
+            OLEDUpdateFlag = 0;
+            //HAL_Delay(100);
+        }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -240,7 +233,7 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 //	ADCValue[2] = KalmanFilter(ADCValue[2]);
 //	ADCValue[3] = KalmanFilter(ADCValue[3]);
 #ifdef UserDebug
-	//���޸ģ����Ч��
+	//���޸ģ����Ч��
 	char Tmp[100];
 	float TempValue = CalculateTemperature(ADCValue[3]);
 	uint16_t len = sprintf(Tmp, "Battery V:%d---VADJ:%d---Current V:%d---Temperature:%f\r\n", ADCValue[0],  ADCValue[1],  ADCValue[2],  TempValue);
@@ -338,18 +331,18 @@ void OLEDDisplay()
 
 void Update_FPS()
 {
-  uint32_t current_time = HAL_GetTick(); // ��ȡ��ǰϵͳʱ�䣨��λ��ms��
+  uint32_t current_time = HAL_GetTick(); // ��ȡ��ǰϵͳʱ�䣨��λ��ms��
 	static unsigned int frame_count = 0;
 	static uint32_t last_time = 0;
 	
 
-  frame_count++;  // �ۼ�֡��
+  frame_count++;  // �ۼ�֡��
 
-  if (current_time - last_time >= 1000)  // ÿ�����һ�� FPS
+  if (current_time - last_time >= 1000)  // ÿ�����һ�� FPS
   {
-     fps = frame_count;  // ��¼ 1 ���ڵ�֡��
-     frame_count = 0;    // ���¼���
-     last_time = current_time; // ��¼ʱ��
+     fps = frame_count;  // ��¼ 1 ���ڵ�֡��
+     frame_count = 0;    // ���¼���
+     last_time = current_time; // ��¼ʱ��
   }
 }
 /* USER CODE END 4 */
