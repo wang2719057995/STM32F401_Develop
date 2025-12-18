@@ -255,12 +255,12 @@ int main(void)
             }
         }
 
-        if(OLEDUpdateFlag == 1)
-        {
+        //if(OLEDUpdateFlag == 1)
+        //{
             OLEDDisplay();
-            OLEDUpdateFlag = 0;
+            //OLEDUpdateFlag = 0;
             //HAL_Delay(100);
-        }
+        //}
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -386,6 +386,11 @@ void OLEDDisplay()
 	CalculateResult(ADCFilterResult, 4, ADCResult);
 	//OLED_Clear();\
 	
+	if(OLEDUpdateFlag == 1)
+  {
+		OLEDUpdateFlag = 0;
+            
+	
 	static unsigned int frame_count = 0;
     static uint32_t last_time = 0;
     frame_count++;
@@ -414,6 +419,7 @@ void OLEDDisplay()
 	
 	OLED_ShowString(0, 5, "DC-DC OUT A:", 12, 0);
 	OLED_ShowFloat(sizeof("DC-DC OUT A:")*6-6, 5, ADCResult[3], 2, 12, 0);
+	}
 	//OLED_Refresh();
 	//Update_FPS();
 
@@ -424,30 +430,29 @@ void OLEDDisplay()
     const char *src;
 
     // 1. FPS
-    src = "FPS:"; while(*src) *p++ = *src++;
+    src = "Channel:"; while(*src) *p++ = *src++;
     IntToString(fps, tempStr);
     src = tempStr; while(*src) *p++ = *src++;
 
     // 2. Temp
-    src = " T:"; while(*src) *p++ = *src++;
+    src = ","; while(*src) *p++ = *src++;
     FloatToString(TempValue, tempStr);
     src = tempStr; while(*src) *p++ = *src++;
 
     // 3. ADCResult[0] (Rectifier OUT A)
-    src = " A:"; while(*src) *p++ = *src++;
+    src = ","; while(*src) *p++ = *src++;
     FloatToString(ADCResult[0], tempStr);
     src = tempStr; while(*src) *p++ = *src++;
 
     // 4. ADCResult[1] (Rectifier OUT V)
-    src = " V:"; while(*src) *p++ = *src++;
+    src = ","; while(*src) *p++ = *src++;
     FloatToString(ADCResult[1], tempStr);
     src = tempStr; while(*src) *p++ = *src++;
 
-    *p = '\0'; // 结束�?
+    *p++ = '\n'; // 结束�?
+		*p = '\0';
 
     HAL_UART_Transmit(&huart1, (uint8_t *)displayStr, strlen(displayStr), HAL_MAX_DELAY);
-
-
 }
 
 void Update_FPS()
