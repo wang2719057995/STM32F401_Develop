@@ -22,6 +22,7 @@
 #include "dma.h"
 #include "i2c.h"
 #include "tim.h"
+#include "usart.h"
 #include "usb_device.h"
 #include "gpio.h"
 
@@ -35,9 +36,20 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-#define ADC_CHANNELS 5
+#define ADC_CHANNELS 6
 uint16_t ADCValue[ADC_CHANNELS];
 uint16_t ADCFilterResult[ADC_CHANNELS];
+
+// 卡尔曼滤波器结构体
+typedef struct {
+    float x_est;      // 估计值
+    float P;          // 估计误差协方差
+    float Q;          // 过程噪声协方差 (Process Noise Covariance)
+    float R;          // 测量噪声协方差 (Measurement Noise Covariance)
+    float K;          // 卡尔曼增益
+} KalmanFilter_t;
+
+KalmanFilter_t KalmanFilters[ADC_CHANNELS]; // 为每个通道定义一个滤波器
 
 enum LedState Led1State = Normal;
 
@@ -75,6 +87,35 @@ void SystemClock_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+// 卡尔曼滤波初始化函数
+void Kalman_Init(KalmanFilter_t *kf, float Q, float R, float initial_value) {
+    kf->x_est = initial_value;
+    kf->P = 1.0f;
+    kf->Q = Q; // 过程噪声，越小越相信预测模型（越平滑，滞后越大）
+    kf->R = R; // 测量噪声，越大越不相信测量值（越平滑，滞后越大）
+    kf->K = 0.0f;
+}
+
+// 卡尔曼滤波计算函数
+float Kalman_Update(KalmanFilter_t *kf, float measurement) {
+    // 1. 预测步骤 (对于静态测量，预测值等于上一时刻估计值)
+    // x_pred = x_est_prev;
+    // P_pred = P_prev + Q;
+    float P_pred = kf->P + kf->Q;
+
+    // 2. 更新步骤
+    // K = P_pred / (P_pred + R);
+    kf->K = P_pred / (P_pred + kf->R);
+
+    // x_est = x_pred + K * (measurement - x_pred);
+    kf->x_est = kf->x_est + kf->K * (measurement - kf->x_est);
+
+    // P = (1 - K) * P_pred;
+    kf->P = (1.0f - kf->K) * P_pred;
+
+    return kf->x_est;
+}
+
 uint16_t AverageFilter(uint16_t *ValueBuff, uint8_t len)
 {
 	 uint32_t sum = 0;
@@ -84,6 +125,47 @@ uint16_t AverageFilter(uint16_t *ValueBuff, uint8_t len)
         sum += ValueBuff[i];	
    }
    return sum/len;
+}
+
+// 辅助函数：将整数转换为字符串
+void IntToString(int value, char *buffer) {
+    char temp[12];
+    int i = 0, j = 0;
+    if (value == 0) {
+        buffer[0] = '0';
+        buffer[1] = '\0';
+        return;
+    }
+    if (value < 0) {
+        buffer[j++] = '-';
+        value = -value;
+    }
+    while (value > 0) {
+        temp[i++] = (value % 10) + '0';
+        value /= 10;
+    }
+    while (i > 0) {
+        buffer[j++] = temp[--i];
+    }
+    buffer[j] = '\0';
+}
+
+void FloatToString(float value, char *buffer) {
+    int intPart = (int)value;
+    int fracPart = (int)((value - intPart) * 100);
+    if (fracPart < 0) fracPart = -fracPart;
+    
+    char intStr[12];
+    IntToString(intPart, intStr);
+    
+    int i = 0;
+    while (intStr[i] != '\0') {
+        *buffer++ = intStr[i++];
+    }
+    *buffer++ = '.';
+    *buffer++ = (fracPart / 10) + '0';
+    *buffer++ = (fracPart % 10) + '0';
+    *buffer = '\0';
 }
 /* USER CODE END 0 */
 
@@ -123,16 +205,24 @@ int main(void)
   MX_TIM3_Init();
   MX_USB_DEVICE_Init();
   MX_TIM11_Init();
+  MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
-	
-	//HAL_ADCEx_Calibration_Start(&hadc1,ADC_SINGLE_ENDED);//ADCУ׼����
-	HAL_TIM_Base_Start(&htim3);
-	HAL_ADC_Start_DMA(&hadc1, (uint32_t *)ADCValue, ADC_CHANNELS);
-	
-	//LED����
-	HAL_TIM_Base_Start_IT(&htim10);
-	
-	//OLEDˢ�¿���
+    
+    //HAL_ADCEx_Calibration_Start(&hadc1,ADC_SINGLE_ENDED);//ADCУ׼
+    HAL_TIM_Base_Start(&htim3);
+    HAL_ADC_Start_DMA(&hadc1, (uint32_t *)ADCValue, ADC_CHANNELS);
+    
+    // 初始化卡尔曼滤波器参数
+    // Q: 过程噪声 (0.001 ~ 0.1)，R: 测量噪声 (1 ~ 100)
+    // 根据实际波形调整 Q 和 R。R 越大滤波效果越强。
+    for(int i = 0; i < ADC_CHANNELS; i++) {
+        Kalman_Init(&KalmanFilters[i], 0.01f, 10.0f, 0.0f);
+    }
+
+    //LED
+    HAL_TIM_Base_Start_IT(&htim10);
+    
+    //OLEDˢ�¿���
 	HAL_TIM_Base_Start_IT(&htim11);
 	
 	OLED_Init();
@@ -144,24 +234,23 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-        // 改进：使用一阶滞后滤波替代均值滤波
-        // 优点：无需等待采集满N个点，每次DMA完成即可更新结果，实时性更强，且无需大数组节省RAM
+        // 改进：使用卡尔曼滤波替代一阶滞后滤波
         if(ADCConvertDone == 1)
         {
             ADCConvertDone = 0;
             for(uint8_t i = 0; i < ADC_CHANNELS; i++)
             {
                 // 简单的初始化判断，防止上电时从0缓慢爬升
-                if(ADCFilterResult[i] == 0)
+                if(ADCFilterResult[i] == 0 && KalmanFilters[i].x_est == 0.0f)
                 {
                     ADCFilterResult[i] = ADCValue[i];
+                    KalmanFilters[i].x_est = (float)ADCValue[i]; // 初始化估计值
                 }
                 else
                 {
-                    // 一阶滤波公式: Y(n) = (X(n) + (K-1)*Y(n-1)) / K
-                    // FilterNum 在此处作为滤波系数 K 使用
-                    // 系数越大，滤波效果越强（越平滑），但对变化的响应越慢
-                    ADCFilterResult[i] = (ADCValue[i] + (FilterNum - 1) * ADCFilterResult[i]) / FilterNum;
+                    // 执行卡尔曼滤波更新
+                    float filtered_val = Kalman_Update(&KalmanFilters[i], (float)ADCValue[i]);
+                    ADCFilterResult[i] = (uint16_t)filtered_val;
                 }
             }
         }
@@ -233,7 +322,7 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 //	ADCValue[2] = KalmanFilter(ADCValue[2]);
 //	ADCValue[3] = KalmanFilter(ADCValue[3]);
 #ifdef UserDebug
-	//���޸ģ����Ч��
+	//���޸ģ����Ч��??
 	char Tmp[100];
 	float TempValue = CalculateTemperature(ADCValue[3]);
 	uint16_t len = sprintf(Tmp, "Battery V:%d---VADJ:%d---Current V:%d---Temperature:%f\r\n", ADCValue[0],  ADCValue[1],  ADCValue[2],  TempValue);
@@ -327,6 +416,38 @@ void OLEDDisplay()
 	OLED_ShowFloat(sizeof("DC-DC OUT A:")*6-6, 5, ADCResult[3], 2, 12, 0);
 	//OLED_Refresh();
 	//Update_FPS();
+
+  // 手动拼接字符�?: "FPS:xx T:xx.xx A:xx.xx V:xx.xx"
+    char displayStr[64];
+    char tempStr[16];
+    char *p = displayStr;
+    const char *src;
+
+    // 1. FPS
+    src = "FPS:"; while(*src) *p++ = *src++;
+    IntToString(fps, tempStr);
+    src = tempStr; while(*src) *p++ = *src++;
+
+    // 2. Temp
+    src = " T:"; while(*src) *p++ = *src++;
+    FloatToString(TempValue, tempStr);
+    src = tempStr; while(*src) *p++ = *src++;
+
+    // 3. ADCResult[0] (Rectifier OUT A)
+    src = " A:"; while(*src) *p++ = *src++;
+    FloatToString(ADCResult[0], tempStr);
+    src = tempStr; while(*src) *p++ = *src++;
+
+    // 4. ADCResult[1] (Rectifier OUT V)
+    src = " V:"; while(*src) *p++ = *src++;
+    FloatToString(ADCResult[1], tempStr);
+    src = tempStr; while(*src) *p++ = *src++;
+
+    *p = '\0'; // 结束�?
+
+    HAL_UART_Transmit(&huart1, (uint8_t *)displayStr, strlen(displayStr), HAL_MAX_DELAY);
+
+
 }
 
 void Update_FPS()
@@ -338,7 +459,7 @@ void Update_FPS()
 
   frame_count++;  // �ۼ�֡��
 
-  if (current_time - last_time >= 1000)  // ÿ�����һ�� FPS
+  if (current_time - last_time >= 1000)  // ÿ�����һ��?? FPS
   {
      fps = frame_count;  // ��¼ 1 ���ڵ�֡��
      frame_count = 0;    // ���¼���
